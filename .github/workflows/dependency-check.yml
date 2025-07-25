@@ -1,0 +1,219 @@
+name: Comprehensive Testing Pipeline
+
+on: 
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  # Dependency Security Scanning
+  dependency-check:
+    runs-on: ubuntu-latest
+    name: Dependency Security Scan
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Run OWASP Dependency Check
+        uses: dependency-check/Dependency-Check_Action@main
+        with:
+          project: "MyWebApp"
+          path: "."
+          format: "HTML"
+          out: "dependency-check-report"
+
+      - name: Upload Dependency Check Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dependency-Check-Report
+          path: dependency-check-report
+
+  # Node.js Security Audit
+  security-audit:
+    runs-on: ubuntu-latest
+    name: Node.js Security Audit
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Run npm audit
+        run: npm audit --audit-level=moderate
+
+      - name: Run npm audit fix (if needed)
+        run: npm audit fix --dry-run
+
+  # UI Testing with Playwright
+  ui-tests:
+    runs-on: ubuntu-latest
+    name: UI Tests
+    needs: [dependency-check, security-audit]
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Install Playwright
+        run: |
+          npm install --save-dev @playwright/test
+          npx playwright install --with-deps
+
+      - name: Create Playwright Config
+        run: |
+          cat > playwright.config.js << 'EOF'
+          module.exports = {
+            testDir: './e2e-tests',
+            timeout: 30000,
+            retries: 2,
+            use: {
+              baseURL: 'http://localhost:3001',
+              headless: true,
+              screenshot: 'only-on-failure',
+              video: 'retain-on-failure',
+            },
+            projects: [
+              {
+                name: 'chromium',
+                use: { browserName: 'chromium' },
+              },
+              {
+                name: 'firefox',
+                use: { browserName: 'firefox' },
+              },
+            ],
+          };
+          EOF
+
+      - name: Create UI Test Files
+        run: |
+          mkdir -p e2e-tests
+          cat > e2e-tests/auth.spec.js << 'EOF'
+          const { test, expect } = require('@playwright/test');
+          
+          test.describe('Authentication Tests', () => {
+            test('should require authentication', async ({ page }) => {
+              const response = await page.goto('/');
+              expect(response.status()).toBe(401);
+            });
+          
+            test('should authenticate with valid credentials', async ({ page }) => {
+              await page.setExtraHTTPHeaders({
+                'Authorization': 'Basic ' + Buffer.from('testuser:testpass123').toString('base64')
+              });
+              await page.goto('/');
+              await expect(page.locator('h1')).toContainText('Welcome to the Protected Web App');
+            });
+          });
+          EOF
+
+          cat > e2e-tests/search.spec.js << 'EOF'
+          const { test, expect } = require('@playwright/test');
+          
+          test.describe('Search Functionality Tests', () => {
+            test.beforeEach(async ({ page }) => {
+              await page.setExtraHTTPHeaders({
+                'Authorization': 'Basic ' + Buffer.from('testuser:testpass123').toString('base64')
+              });
+              await page.goto('/');
+            });
+          
+            test('should display search form', async ({ page }) => {
+              await expect(page.locator('input[name="searchTerm"]')).toBeVisible();
+              await expect(page.locator('button[type="submit"]')).toBeVisible();
+            });
+          
+            test('should handle valid search', async ({ page }) => {
+              await page.fill('input[name="searchTerm"]', 'valid search');
+              await page.click('button[type="submit"]');
+              await expect(page.locator('h1')).toContainText('Search Results');
+              await expect(page.locator('.search-result')).toContainText('valid search');
+            });
+          
+            test('should block XSS attacks', async ({ page }) => {
+              await page.fill('input[name="searchTerm"]', '<script>alert("xss")</script>');
+              await page.click('button[type="submit"]');
+              await expect(page.locator('.error')).toContainText('XSS attack detected');
+              await expect(page.locator('h2')).toContainText('Secure Search Portal');
+            });
+          
+            test('should block SQL injection', async ({ page }) => {
+              await page.fill('input[name="searchTerm"]', "' OR 1=1--");
+              await page.click('button[type="submit"]');
+              await expect(page.locator('.error')).toContainText('SQL injection attack detected');
+              await expect(page.locator('h2')).toContainText('Secure Search Portal');
+            });
+          
+            test('should navigate back from results', async ({ page }) => {
+              await page.fill('input[name="searchTerm"]', 'test search');
+              await page.click('button[type="submit"]');
+              await page.click('button:has-text("Return to Home Page")');
+              await expect(page.locator('h2')).toContainText('Secure Search Portal');
+            });
+          });
+          EOF
+
+      - name: Start Application for UI Tests
+        run: |
+          npm start &
+          sleep 10
+        env:
+          AUTH_USERNAME: testuser
+          AUTH_PASSWORD: testpass123
+          PORT: 3001
+
+      - name: Wait for Application
+        run: npx wait-on http://localhost:3001 --timeout 30000
+
+      - name: Run Playwright Tests
+        run: npx playwright test
+
+      - name: Upload Playwright Report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report
+          path: playwright-report/
+
+  # Final Results Summary
+  test-summary:
+    runs-on: ubuntu-latest
+    name: Test Summary
+    needs: [dependency-check, security-audit, ui-tests]
+    if: always()
+    steps:
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Create Test Summary
+        run: |
+          echo "# Test Results Summary" > test-summary.md
+          echo "" >> test-summary.md
+          echo "## Jobs Status:" >> test-summary.md
+          echo "- Dependency Check: ${{ needs.dependency-check.result }}" >> test-summary.md
+          echo "- Security Audit: ${{ needs.security-audit.result }}" >> test-summary.md
+          echo "- UI Tests: ${{ needs.ui-tests.result }}" >> test-summary.md
+          echo "" >> test-summary.md
+          echo "Check individual job logs and artifacts for detailed results." >> test-summary.md
+
+      - name: Upload Test Summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-summary
+          path: test-summary.md

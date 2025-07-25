@@ -1,0 +1,2 @@
+# GIT SERVER AND SONARQUBE SERVER USING DEFAULT CREDENTIALS
+# GITHUB REPO IS [auradious/SSDTest](https://github.com/auradious/SSD_Test)

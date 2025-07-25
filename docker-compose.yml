@@ -4,7 +4,7 @@ services:
             context: ./
         container_name: ssd_test-webapp
         ports:
-            - "8080:3000"
+            - "80:3000"
         environment:
             - AUTH_USERNAME=admin
             - AUTH_PASSWORD=2301831@sit.singaporetech.edu.sg
@@ -30,6 +30,12 @@ services:
             nofile:
                 soft: 65536
                 hard: 65536
+        healthcheck:
+            test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9000/api/system/status"]
+            interval: 30s
+            timeout: 10s
+            retries: 5
+            start_period: 120s
     
     postgredb:
         image: postgres:15-alpine
@@ -64,22 +70,7 @@ services:
             - gitea_data:/data
             - /etc/timezone:/etc/timezone:ro
             - /etc/localtime:/etc/localtime:ro
-           # - ./init-gitea.sh:/docker-entrypoint.d/init-gitea.sh:ro
         restart: unless-stopped
-        entrypoint: ["/bin/sh", "-c"]
-        command: >
-            sh -c "
-            /usr/bin/entrypoint &
-            sleep 20 &&
-            if ! /usr/local/bin/gitea admin user list --config /data/gitea/conf/app.ini | grep -q git123; then
-            echo 'Creating user git123...' &&
-            /usr/local/bin/gitea admin user create --config /data/gitea/conf/app.ini --username git123 --password git123 --email git123@localhost --admin &&
-            echo 'User created successfully'
-            else
-            echo 'User git123 already exists'
-            fi &&
-            wait
-            "
 
     # Database for Gitea
     gitea_db:
